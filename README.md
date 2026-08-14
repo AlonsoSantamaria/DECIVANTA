@@ -6,4 +6,4 @@ The implementation will begin after the approved Scope, PRD, Technical Specifica
 
 ## Status
 
-Project foundation only. No application code or infrastructure has been created.
+Hackathon MVP build in progress. The first sponsor-integration spike proves a bounded AWS Lambda to CockroachDB Cloud Managed MCP read contract without accepting browser-controlled SQL.

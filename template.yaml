@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: DECIVANTA sponsor-integration spikes
+
+Parameters:
+  McpSecretArn:
+    Type: String
+    NoEcho: true
+
+Resources:
+  ManagedMcpSpikeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: decivanta-managed-mcp-spike
+      Runtime: nodejs24.x
+      Handler: index.handler
+      CodeUri: dist/
+      MemorySize: 256
+      Timeout: 30
+      Environment:
+        Variables:
+          MCP_SECRET_ARN: !Ref McpSecretArn
+          MCP_ENDPOINT: https://cockroachlabs.cloud/mcp
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref McpSecretArn
+
+Outputs:
+  ManagedMcpSpikeFunctionName:
+    Value: !Ref ManagedMcpSpikeFunction
