@@ -5,9 +5,10 @@ export const mcpSecretSchema = z.object({
   clusterId: z.string().uuid(),
 });
 
-export const spikeEventSchema = z.object({
-  operation: z.literal("schema-read").default("schema-read"),
-}).strict();
+export const spikeEventSchema = z.discriminatedUnion("operation", [
+  z.object({ operation: z.literal("schema-read") }).strict(),
+  z.object({ operation: z.literal("bedrock-contract") }).strict(),
+]);
 
 export type McpSecret = z.infer<typeof mcpSecretSchema>;
 

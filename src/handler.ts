@@ -1,5 +1,6 @@
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import type { Handler } from "aws-lambda";
+import { runBedrockContracts } from "./bedrock-client.js";
 import { mcpSecretSchema, spikeEventSchema } from "./contract.js";
 import { runManagedMcpRead } from "./mcp-client.js";
 
@@ -10,6 +11,43 @@ export const handler: Handler = async (event) => {
   const parsedEvent = spikeEventSchema.safeParse(event ?? {});
   if (!parsedEvent.success) {
     return { statusCode: 400, body: JSON.stringify({ requestId, status: "INVALID_REQUEST" }) };
+  }
+
+  if (parsedEvent.data.operation === "bedrock-contract") {
+    let result;
+    try {
+      result = await runBedrockContracts();
+    } catch {
+      console.warn(JSON.stringify({ requestId, status: "BEDROCK_UNAVAILABLE" }));
+      return { statusCode: 503, body: JSON.stringify({ requestId, status: "BEDROCK_UNAVAILABLE" }) };
+    }
+    console.info(JSON.stringify({
+      requestId,
+      status: result.guidance.status === "GUIDANCE_AVAILABLE" ? "BEDROCK_SUCCESS" : "GUIDANCE_UNAVAILABLE",
+      embeddingDimension: result.embedding.dimension,
+      embeddingNorm: Number(result.embedding.norm.toFixed(6)),
+      embeddingDurationMs: result.embedding.durationMs,
+      guidanceDurationMs: result.guidance.durationMs,
+      repairAttempts: result.guidance.repairAttempts,
+      failureReason: result.guidance.status === "GUIDANCE_UNAVAILABLE" ? result.guidance.failureReason : null,
+      failureDetail: result.guidance.status === "GUIDANCE_UNAVAILABLE" ? result.guidance.failureDetail : null,
+      recommendation: result.guidance.status === "GUIDANCE_AVAILABLE" ? result.guidance.value.recommendedAction : null,
+    }));
+    return {
+      statusCode: result.guidance.status === "GUIDANCE_AVAILABLE" ? 200 : 503,
+      body: JSON.stringify({
+        requestId,
+        status: result.guidance.status,
+        embeddingDimension: result.embedding.dimension,
+        embeddingNorm: Number(result.embedding.norm.toFixed(6)),
+        embeddingDurationMs: result.embedding.durationMs,
+        guidanceDurationMs: result.guidance.durationMs,
+        repairAttempts: result.guidance.repairAttempts,
+        failureReason: result.guidance.status === "GUIDANCE_UNAVAILABLE" ? result.guidance.failureReason : null,
+        failureDetail: result.guidance.status === "GUIDANCE_UNAVAILABLE" ? result.guidance.failureDetail : null,
+        recommendation: result.guidance.status === "GUIDANCE_AVAILABLE" ? result.guidance.value.recommendedAction : null,
+      }),
+    };
   }
 
   const secretArn = process.env.MCP_SECRET_ARN;
