@@ -1,0 +1,9 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "decivanta-api"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+parameter_overrides = "McpSecretArn=CONFIGURE_IN_AWS SqlSecretArn=CONFIGURE_IN_AWS"

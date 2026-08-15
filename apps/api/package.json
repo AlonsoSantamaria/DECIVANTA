@@ -1,0 +1,10 @@
+{
+  "name": "@decivanta/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:api --workspace=decivanta",
+    "typecheck": "tsc -p ../../tsconfig.json --noEmit"
+  }
+}

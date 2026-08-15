@@ -1,0 +1,18 @@
+version: 1
+applications:
+  - appRoot: apps/web
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci --include-workspace-root
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: out
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - ../../node_modules/**/*
