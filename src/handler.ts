@@ -1,8 +1,8 @@
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import type { Handler } from "aws-lambda";
-import { runBedrockContracts } from "./bedrock-client.js";
-import { mcpSecretSchema, spikeEventSchema } from "./contract.js";
-import { runManagedMcpRead } from "./mcp-client.js";
+import { embedText, runBedrockContracts } from "./bedrock-client.js";
+import { mcpSecretSchema, NORTHSTAR_ORGANIZATION_ID, spikeEventSchema, UPDATED_FORECAST_SIGNAL } from "./contract.js";
+import { runManagedMcpRead, runManagedMcpVectorRetrieval } from "./mcp-client.js";
 
 const secrets = new SecretsManagerClient({});
 
@@ -56,6 +56,44 @@ export const handler: Handler = async (event) => {
 
   const secretResponse = await secrets.send(new GetSecretValueCommand({ SecretId: secretArn }));
   const parsedSecret = mcpSecretSchema.parse(JSON.parse(secretResponse.SecretString ?? "{}"));
+  if (parsedEvent.data.operation === "vector-retrieval") {
+    const embedded = await embedText(UPDATED_FORECAST_SIGNAL);
+    const result = await runManagedMcpVectorRetrieval(
+      endpoint,
+      parsedSecret,
+      NORTHSTAR_ORGANIZATION_ID,
+      embedded.values,
+    );
+    console.info(JSON.stringify({
+      requestId,
+      status: "MCP_VECTOR_SUCCESS",
+      tool: result.tool,
+      embeddingDurationMs: embedded.durationMs,
+      retrievalDurationMs: result.durationMs,
+      rowCount: result.rowCount,
+      matches: result.matches.map((match, index) => ({
+        rank: index + 1,
+        sourceId: match.source_id,
+        sourceType: match.source_type,
+        distance: Number(match.cosine_distance.toFixed(6)),
+      })),
+    }));
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        requestId,
+        status: "MCP_VECTOR_SUCCESS",
+        embeddingDurationMs: embedded.durationMs,
+        retrievalDurationMs: result.durationMs,
+        matches: result.matches.map((match, index) => ({
+          rank: index + 1,
+          sourceId: match.source_id,
+          sourceType: match.source_type,
+          distance: Number(match.cosine_distance.toFixed(6)),
+        })),
+      }),
+    };
+  }
   const result = await runManagedMcpRead(endpoint, parsedSecret);
 
   console.info(JSON.stringify({

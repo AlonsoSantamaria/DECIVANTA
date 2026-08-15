@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { SCHEMA_READ_QUERY, spikeEventSchema } from "../src/contract.js";
-import { extractRowCount } from "../src/mcp-client.js";
+import { NORTHSTAR_ORGANIZATION_ID, SCHEMA_READ_QUERY, spikeEventSchema } from "../src/contract.js";
+import { buildVectorRetrievalQuery, extractRowCount } from "../src/mcp-client.js";
 
 describe("Managed MCP spike contract", () => {
   it("accepts only the fixed schema-read operation", () => {
     expect(spikeEventSchema.parse({ operation: "schema-read" })).toEqual({ operation: "schema-read" });
+  });
+
+  it("accepts the server-owned vector retrieval operation without arguments", () => {
+    expect(spikeEventSchema.parse({ operation: "vector-retrieval" })).toEqual({ operation: "vector-retrieval" });
   });
 
   it.each([
@@ -26,5 +30,21 @@ describe("Managed MCP spike contract", () => {
 
   it("extracts row count without logging returned row data", () => {
     expect(extractRowCount({ content: [{ type: "text", text: '[{"mcp_read_probe":1}]' }] })).toBe(1);
+  });
+
+  it("builds vector SQL only from a validated UUID and finite 1024-dimensional embedding", () => {
+    const query = buildVectorRetrievalQuery(NORTHSTAR_ORGANIZATION_ID, Array.from({ length: 1024 }, () => 1 / 32));
+    expect(query).toContain(`organization_id = '${NORTHSTAR_ORGANIZATION_ID}'::UUID`);
+    expect(query).toContain("ORDER BY cosine_distance");
+    expect(query).toContain("LIMIT 5");
+    expect(query.length).toBeLessThanOrEqual(16_384);
+  });
+
+  it.each([
+    [NORTHSTAR_ORGANIZATION_ID, Array.from({ length: 1023 }, () => 0)],
+    [NORTHSTAR_ORGANIZATION_ID, [...Array.from({ length: 1023 }, () => 0), Number.NaN]],
+    ["not-a-uuid", Array.from({ length: 1024 }, () => 0)],
+  ])("rejects unsafe vector-query inputs", (organizationId, embedding) => {
+    expect(() => buildVectorRetrievalQuery(organizationId, embedding)).toThrow();
   });
 });

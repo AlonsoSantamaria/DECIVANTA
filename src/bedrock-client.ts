@@ -13,6 +13,25 @@ const embeddingResponseSchema = z.object({
   embedding: z.array(z.number().finite()).length(1024),
 });
 
+export async function embedText(
+  inputText: string,
+  client = new BedrockRuntimeClient({}),
+): Promise<{ durationMs: number; values: number[] }> {
+  const startedAt = performance.now();
+  const response = await client.send(new InvokeModelCommand({
+    modelId: process.env.EMBEDDING_MODEL_ID ?? EMBEDDING_MODEL_ID,
+    contentType: "application/json",
+    accept: "application/json",
+    body: JSON.stringify({ inputText, dimensions: 1024, normalize: true }),
+  }));
+  const values = embeddingResponseSchema.parse(
+    JSON.parse(new TextDecoder().decode(response.body)),
+  ).embedding;
+  const norm = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  if (Math.abs(norm - 1) > 0.01) throw new Error("EMBEDDING_NOT_NORMALIZED");
+  return { durationMs: Math.round(performance.now() - startedAt), values };
+}
+
 export const guidanceSchema = z.object({
   summary: z.string().min(20).max(320),
   recommendedAction: z.literal("REQUEST_REVISED_SCENARIO"),
@@ -83,18 +102,12 @@ function classifyGuidanceFailure(error: unknown): GuidanceFailureReason {
 }
 
 export async function runBedrockContracts(client = new BedrockRuntimeClient({})): Promise<BedrockContractResult> {
-  const embeddingStarted = performance.now();
-  const embeddingResponse = await client.send(new InvokeModelCommand({
-    modelId: process.env.EMBEDDING_MODEL_ID ?? EMBEDDING_MODEL_ID,
-    contentType: "application/json",
-    accept: "application/json",
-    body: JSON.stringify({ inputText: "Updated cash forecast challenges the condition supporting Project Atlas acceleration.", dimensions: 1024, normalize: true }),
-  }));
-  const decoded = new TextDecoder().decode(embeddingResponse.body);
-  const embedding = embeddingResponseSchema.parse(JSON.parse(decoded)).embedding;
-  const norm = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
-  if (Math.abs(norm - 1) > 0.01) throw new Error("EMBEDDING_NOT_NORMALIZED");
-  const embeddingDurationMs = Math.round(performance.now() - embeddingStarted);
+  const embedded = await embedText(
+    "Updated cash forecast challenges the condition supporting Project Atlas acceleration.",
+    client,
+  );
+  const norm = Math.sqrt(embedded.values.reduce((sum, value) => sum + value * value, 0));
+  const embeddingDurationMs = embedded.durationMs;
 
   const guidanceStarted = performance.now();
   let repairAttempts: 0 | 1 = 0;
