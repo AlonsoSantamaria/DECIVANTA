@@ -13,7 +13,7 @@ export type McpReadResult = {
 
 const memoryMatchSchema = z.object({
   id: z.string().uuid(),
-  source_type: z.enum(["decision", "rationale", "assumption", "executive_decision", "follow_up"]),
+  source_type: z.enum(["decision", "rationale", "assumption", "executive_decision", "follow_up", "fact", "observed_pattern", "inference", "condition", "commitment"]),
   source_id: z.string().uuid(),
   cosine_distance: z.coerce.number().finite().min(0).max(2),
 });
@@ -173,6 +173,22 @@ export async function runManagedMcpSessionContextRetrieval(
   const matches = z.array(memoryMatchSchema).max(5).parse(extractJsonRows(response));
   return { contentBlocks: Array.isArray((response as { content?: unknown[] }).content) ? (response as { content: unknown[] }).content.length : 0,
     durationMs, matches, rowCount: matches.length, tool: "select_query" };
+}
+
+export function buildMissionRetrievalQuery(organizationId: string, missionId: string, embedding: number[], sessionId?: string, generation?: string): string {
+  if (!z.string().uuid().safeParse(organizationId).success || !/^[a-z0-9-]{3,80}$/.test(missionId) || embedding.length !== 1024 || embedding.some((value) => !Number.isFinite(value))) throw new Error("INVALID_MISSION_SCOPE");
+  if ((sessionId && !z.string().uuid().safeParse(sessionId).success) || (generation && !/^\d+$/.test(generation))) throw new Error("INVALID_MISSION_SCOPE");
+  const vector = `[${embedding.map((value) => value.toFixed(8)).join(",")}]`;
+  const scope = sessionId && generation ? ` AND session_id = '${sessionId}'::UUID AND generation = ${generation}::INT8` : " AND session_id IS NULL";
+  const query = `SELECT id, source_type, source_id, embedding <=> '${vector}'::VECTOR AS cosine_distance FROM memory_items WHERE organization_id = '${organizationId}'::UUID AND mission_id = '${missionId}'${scope} ORDER BY cosine_distance LIMIT 8`;
+  if (query.length > 16_384) throw new Error("MCP_QUERY_TOO_LONG");
+  return query;
+}
+
+export async function runManagedMcpMissionRetrieval(endpoint: string, secret: McpSecret, organizationId: string, missionId: string, embedding: number[], sessionId?: string, generation?: string): Promise<McpVectorResult> {
+  const { response, durationMs } = await callSelectQuery(endpoint, secret, buildMissionRetrievalQuery(organizationId, missionId, embedding, sessionId, generation));
+  const matches = z.array(memoryMatchSchema).max(8).parse(extractJsonRows(response));
+  return { contentBlocks: Array.isArray((response as { content?: unknown[] }).content) ? (response as { content: unknown[] }).content.length : 0, durationMs, matches, rowCount: matches.length, tool: "select_query" };
 }
 
 export async function runManagedMcpRead(

@@ -53,9 +53,11 @@ async function main(): Promise<void> {
         await client.query(await readFile(join(root, "migrations", "001_initial_schema.sql"), "utf8"));
       }
       await client.query(await readFile(join(root, "migrations", "002_longitudinal_mission_memory.sql"), "utf8"));
+      await client.query(await readFile(join(root, "migrations", "003_business_case_watch.sql"), "utf8"));
     }
     console.info("MIGRATION_STAGE=seed");
     await client.query(await readFile(join(root, "seeds", "001_northstar_atlas.sql"), "utf8"));
+    await client.query(await readFile(join(root, "seeds", "002_orion.sql"), "utf8"));
     const memories = await client.query<{ id: string; content: string }>(
       "SELECT id, content FROM memory_items WHERE organization_id = $1::UUID AND embedding IS NULL ORDER BY id",
       ["00000000-0000-4000-8000-000000000001"],
@@ -64,13 +66,14 @@ async function main(): Promise<void> {
       await client.query("UPDATE memory_items SET embedding = $1::VECTOR WHERE id = $2::UUID", [await embed(memory.content), memory.id]);
     }
 
-    const counts = await client.query<{ organizations: string; decisions: string; assumptions: string; forecasts: string; memories: string; embedded: string }>(`
+    const counts = await client.query<{ organizations: string; decisions: string; assumptions: string; forecasts: string; memories: string; embedded: string; orion: string }>(`
       SELECT (SELECT count(*) FROM organizations) AS organizations,
              (SELECT count(*) FROM decisions) AS decisions,
              (SELECT count(*) FROM decision_assumptions) AS assumptions,
              (SELECT count(*) FROM forecasts) AS forecasts,
              (SELECT count(*) FROM memory_items) AS memories,
-             (SELECT count(*) FROM memory_items WHERE embedding IS NOT NULL) AS embedded
+             (SELECT count(*) FROM memory_items WHERE embedding IS NOT NULL) AS embedded,
+             (SELECT count(*) FROM memory_items WHERE mission_id = 'business-case-watch-orion') AS orion
     `);
     const invariants = await client.query<{ threshold: string; baseline: string; updated: string; variance: string }>(`
       SELECT a.threshold_value::STRING AS threshold, b.value::STRING AS baseline,
@@ -83,7 +86,7 @@ async function main(): Promise<void> {
     const index = await client.query<{ index_name: string }>("SHOW INDEX FROM memory_items");
     const row = counts.rows[0];
     const values = invariants.rows[0];
-    console.info(`COUNTS organizations=${row.organizations} decisions=${row.decisions} assumptions=${row.assumptions} forecasts=${row.forecasts} memories=${row.memories} embedded=${row.embedded}`);
+    console.info(`COUNTS organizations=${row.organizations} decisions=${row.decisions} assumptions=${row.assumptions} forecasts=${row.forecasts} memories=${row.memories} embedded=${row.embedded} orion=${row.orion}`);
     console.info(`INVARIANTS threshold=${values.threshold} baseline=${values.baseline} updated=${values.updated} variance=${values.variance}`);
     console.info(`VECTOR_INDEX_PRESENT=${index.rows.some((item) => item.index_name === "memory_items_org_embedding_idx")}`);
   } finally {

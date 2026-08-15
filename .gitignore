@@ -17,3 +17,4 @@ Thumbs.db
 .idea/
 .vscode/
 samconfig.toml
+.aws-sam/

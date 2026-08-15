@@ -133,6 +133,34 @@ export async function generateGuidance(client = new BedrockRuntimeClient({})): P
   return { status: "GUIDANCE_UNAVAILABLE", durationMs: Math.round(performance.now() - guidanceStarted), failureDetail, failureReason, repairAttempts: 1 };
 }
 
+export const businessCaseGuidanceSchema = z.object({
+  summary: z.string().min(20).max(360),
+  recommendedAction: z.literal("PRESENT_BOTH_RECOMMEND_ACCELERATED"),
+  explanation: z.string().min(20).max(420),
+  uncertaintyStatement: z.string().min(20).max(300),
+}).strict();
+export type BusinessCaseGuidance = z.infer<typeof businessCaseGuidanceSchema>;
+
+export async function generateBusinessCaseGuidance(client = new BedrockRuntimeClient({})): Promise<{ durationMs: number; value: BusinessCaseGuidance }> {
+  const started = performance.now();
+  const system = [
+    "Return JSON only with summary, recommendedAction, explanation, uncertaintyStatement.",
+    "recommendedAction must be PRESENT_BOTH_RECOMMEND_ACCELERATED.",
+    "Explain the cost/schedule conflict and suggest presenting both alternatives.",
+    "State that the historical pattern is bounded observation, not a confirmed permanent client preference.",
+    "Do not include digits; canonical numeric facts are rendered separately.",
+    "Do not claim DECIVANTA made or authorized the decision."
+  ].join(" ");
+  const facts = "ORION standard procurement protects budget but threatens the committed opening date. Accelerated procurement adds cost and protects that date. Historical fact: a general CAPEX increase was rejected. Historical decision: additional cost was later accepted to protect the opening date.";
+  const response = await client.send(new ConverseCommand({ modelId: process.env.GUIDANCE_MODEL_ID ?? GUIDANCE_MODEL_ID, system: [{ text: system }], messages: [{ role: "user", content: [{ text: facts }] }], inferenceConfig: { maxTokens: 350, temperature: 0 } }));
+  const value = businessCaseGuidanceSchema.parse(extractJson(textFromConverse(response)));
+  const prose = `${value.summary} ${value.explanation} ${value.uncertaintyStatement}`;
+  if (NUMERIC_CLAIM.test(prose)) throw new Error("GUIDANCE_UNSUPPORTED_NUMBER");
+  if (AUTONOMOUS_AUTHORITY.test(prose)) throw new Error("GUIDANCE_AUTONOMOUS_AUTHORITY");
+  if (!/observ|pattern|not a confirmed|not.*preference/i.test(value.uncertaintyStatement)) throw new Error("GUIDANCE_UNCERTAINTY_REQUIRED");
+  return { durationMs: Math.round(performance.now() - started), value };
+}
+
 export async function runBedrockContracts(client = new BedrockRuntimeClient({})): Promise<BedrockContractResult> {
   const embedded = await embedText(
     "Updated cash forecast challenges the condition supporting Project Atlas acceleration.",

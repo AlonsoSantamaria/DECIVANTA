@@ -13,6 +13,7 @@ const responseBodySchema = z.object({
   note: z.string().max(500),
   reviewRunId: z.string().uuid(),
 }).strict();
+const orionActionBodySchema = z.object({ idempotencyKey: idempotencyKeySchema, runId: z.string().uuid(), nextReviewDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict();
 
 export function isHttpApiRequest(event: unknown): event is APIGatewayProxyEventV2 {
   return typeof event === "object" && event !== null && "requestContext" in event && "rawPath" in event;
@@ -70,6 +71,14 @@ export async function handleHttpApiRequest(
       command = { operation: "run-cycle", sessionToken: bearer(event), idempotencyKey: body.idempotencyKey };
     } else if (method === "POST" && event.rawPath === "/v1/demo/context-retrievals") {
       command = { operation: "retrieve-context", sessionToken: bearer(event) };
+    } else if (method === "POST" && event.rawPath === "/v1/missions/orion/reviews") {
+      const body = reviewBodySchema.parse(bodyOf(event));
+      command = { operation: "orion-review", sessionToken: bearer(event), idempotencyKey: body.idempotencyKey };
+    } else if (method === "POST" && event.rawPath === "/v1/missions/orion/actions") {
+      const body = orionActionBodySchema.parse(bodyOf(event));
+      command = { operation: "orion-action", sessionToken: bearer(event), ...body };
+    } else if (method === "POST" && event.rawPath === "/v1/missions/orion/context-retrievals") {
+      command = { operation: "orion-context", sessionToken: bearer(event) };
     } else if (method === "POST" && event.rawPath === "/v1/demo/guidance-retries") {
       const body = retryBodySchema.parse(bodyOf(event));
       command = { operation: "retry-guidance", sessionToken: bearer(event), ...body };
