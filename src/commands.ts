@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { NORTHSTAR_ORGANIZATION_ID } from "./contract.js";
 import { sqlPool } from "./sql-client.js";
+import { embedText, EMBEDDING_MODEL_ID } from "./bedrock-client.js";
 
 type CommandType = "response" | "guidance_retry" | "reset";
 
@@ -70,6 +71,32 @@ async function finishReceipt(
             response_snapshot = $5::JSONB, completed_at = now()
       WHERE session_id = $1::UUID AND command_type = $2 AND idempotency_key = $3`,
     [sessionId, commandType, idempotencyKey, resourceId, JSON.stringify(snapshot)],
+  );
+}
+
+async function materializeExecutiveMemory(input: {
+  action: string; nextReviewDate: string; note: string; responseId: string; reviewRunId: string; sessionId: string; generation: string;
+}): Promise<void> {
+  const pool = await sqlPool();
+  const review = await pool.query<{ decision_code: string }>(
+    `SELECT d.decision_code FROM review_runs rr JOIN decisions d ON d.id = rr.decision_id
+      WHERE rr.id = $1::UUID AND rr.session_id = $2::UUID AND rr.generation = $3::INT8`,
+    [input.reviewRunId, input.sessionId, input.generation],
+  );
+  if (review.rowCount !== 1) throw new Error("REVIEW_NOT_FOUND");
+  const decisionContent = `Executive decision for ${review.rows[0].decision_code}: ${input.action}. ${input.note.trim() || "No additional note."}`;
+  const followUpContent = `Follow-up for ${review.rows[0].decision_code}: next executive review scheduled for ${input.nextReviewDate}.`;
+  const [decisionEmbedding, followUpEmbedding] = await Promise.all([embedText(decisionContent), embedText(followUpContent)]);
+  await pool.query(
+    `INSERT INTO memory_items
+      (id, organization_id, source_type, source_id, content, language_code, embedding_model, embedding, session_id, generation)
+     VALUES
+      ($1::UUID, $2::UUID, 'executive_decision', $3::UUID, $4, 'en', $5, $6::VECTOR, $7::UUID, $8::INT8),
+      ($9::UUID, $2::UUID, 'follow_up', $3::UUID, $10, 'en', $5, $11::VECTOR, $7::UUID, $8::INT8)
+     ON CONFLICT (organization_id, source_type, source_id) DO NOTHING`,
+    [randomUUID(), NORTHSTAR_ORGANIZATION_ID, input.responseId, decisionContent,
+      process.env.EMBEDDING_MODEL_ID ?? EMBEDDING_MODEL_ID, `[${decisionEmbedding.values.join(",")}]`, input.sessionId, input.generation,
+      randomUUID(), followUpContent, `[${followUpEmbedding.values.join(",")}]`],
   );
 }
 
@@ -211,6 +238,7 @@ export async function recordExecutiveResponse(input: {
     );
     if (replay) {
       await client.query("COMMIT");
+      await materializeExecutiveMemory({ ...input, responseId: replay.responseId, sessionId: session.id, generation: session.generation });
       return { ...replay, replayed: true };
     }
     const owned = await client.query(
@@ -243,6 +271,7 @@ export async function recordExecutiveResponse(input: {
     const snapshot = { action: input.action, nextReviewDate: input.nextReviewDate, responseId };
     await finishReceipt(client, session.id, "response", input.idempotencyKey, responseId, snapshot);
     await client.query("COMMIT");
+    await materializeExecutiveMemory({ ...input, responseId, sessionId: session.id, generation: session.generation });
     return { ...snapshot, replayed: false };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);

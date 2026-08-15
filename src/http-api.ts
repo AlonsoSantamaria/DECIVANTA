@@ -68,6 +68,8 @@ export async function handleHttpApiRequest(
     } else if (method === "POST" && event.rawPath === "/v1/demo/reviews") {
       const body = reviewBodySchema.parse(bodyOf(event));
       command = { operation: "run-cycle", sessionToken: bearer(event), idempotencyKey: body.idempotencyKey };
+    } else if (method === "POST" && event.rawPath === "/v1/demo/context-retrievals") {
+      command = { operation: "retrieve-context", sessionToken: bearer(event) };
     } else if (method === "POST" && event.rawPath === "/v1/demo/guidance-retries") {
       const body = retryBodySchema.parse(bodyOf(event));
       command = { operation: "retry-guidance", sessionToken: bearer(event), ...body };

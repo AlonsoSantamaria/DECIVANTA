@@ -3,9 +3,10 @@ import type { PoolClient } from "pg";
 import { EMBEDDING_MODEL_ID, generateGuidance, GUIDANCE_MODEL_ID, embedText } from "./bedrock-client.js";
 import { NORTHSTAR_ORGANIZATION_ID, UPDATED_FORECAST_SIGNAL } from "./contract.js";
 import { evaluateGteCondition } from "./domain.js";
-import { runManagedMcpVectorRetrieval, type MemoryMatch } from "./mcp-client.js";
+import { runManagedMcpSessionContextRetrieval, runManagedMcpVectorRetrieval, type MemoryMatch } from "./mcp-client.js";
 import { sqlPool } from "./sql-client.js";
 import type { McpSecret } from "./contract.js";
+import { financialOversightMission } from "./missions/financial-oversight.js";
 
 const UPDATED_FORECAST_CODE = "ATLAS-CASH-UPDATED-Q4-2026";
 
@@ -30,6 +31,37 @@ export async function createDemoSession(): Promise<{ sessionToken: string; gener
     [randomUUID(), digest(token), NORTHSTAR_ORGANIZATION_ID],
   );
   return { sessionToken: token, generation: 1 };
+}
+
+export async function retrievePersistedMissionContext(
+  endpoint: string,
+  mcpSecret: McpSecret,
+  sessionToken: string,
+): Promise<{ missionId: string; matches: Array<{ distance: number; sourceType: "executive_decision" | "follow_up" }>; nextReviewDate: string }> {
+  const pool = await sqlPool();
+  const session = await pool.query<{ generation: string; id: string }>(
+    `SELECT id, generation::STRING AS generation FROM demo_sessions WHERE token_hash = $1::BYTES AND expires_at > now()`,
+    [digest(sessionToken)],
+  );
+  if (session.rowCount !== 1) throw new Error("DEMO_SESSION_INVALID");
+  const embedded = await embedText(financialOversightMission.contextRetrievalText);
+  const retrieved = await runManagedMcpSessionContextRetrieval(endpoint, mcpSecret, NORTHSTAR_ORGANIZATION_ID,
+    session.rows[0].id, session.rows[0].generation, embedded.values);
+  const longitudinal = retrieved.matches.filter((match): match is MemoryMatch & { source_type: "executive_decision" | "follow_up" } =>
+    match.source_type === "executive_decision" || match.source_type === "follow_up");
+  if (!longitudinal.some((match) => match.source_type === "executive_decision") || !longitudinal.some((match) => match.source_type === "follow_up")) {
+    throw new Error("PERSISTED_CONTEXT_UNAVAILABLE");
+  }
+  const followUp = await pool.query<{ next_review_date: string }>(
+    `SELECT er.next_review_date::STRING AS next_review_date FROM executive_responses er
+      JOIN review_runs rr ON rr.id = er.review_run_id
+      WHERE rr.session_id = $1::UUID AND rr.generation = $2::INT8 ORDER BY er.recorded_at DESC LIMIT 1`,
+    [session.rows[0].id, session.rows[0].generation],
+  );
+  if (followUp.rowCount !== 1) throw new Error("PERSISTED_CONTEXT_UNAVAILABLE");
+  return { missionId: financialOversightMission.id,
+    matches: longitudinal.map((match) => ({ distance: match.cosine_distance, sourceType: match.source_type })),
+    nextReviewDate: followUp.rows[0].next_review_date };
 }
 
 type CycleSnapshot = {
@@ -224,6 +256,7 @@ export async function runDecisionCycle(
   const retrieved = await runManagedMcpVectorRetrieval(endpoint, mcpSecret, NORTHSTAR_ORGANIZATION_ID, embedded.values);
   const facts = await hydrateCanonicalFacts(retrieved.matches);
   const evaluated = evaluateGteCondition(facts.threshold, facts.observed);
+  if (!financialOversightMission.attentionCondition(evaluated)) throw new Error("ATTENTION_NOT_REQUIRED");
   const guidance = await generateGuidance();
   if (guidance.status !== "GUIDANCE_AVAILABLE") throw new Error("GUIDANCE_UNAVAILABLE");
   const snapshot: CycleSnapshot = {

@@ -16,6 +16,7 @@ export const spikeEventSchema = z.discriminatedUnion("operation", [
     idempotencyKey: z.string().uuid(),
   }).strict(),
   z.object({ operation: z.literal("get-state"), sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
+  z.object({ operation: z.literal("retrieve-context"), sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
   z.object({
     operation: z.literal("record-response"),
     sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),

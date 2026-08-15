@@ -49,7 +49,10 @@ async function main(): Promise<void> {
     }
     if (process.env.SEED_ONLY !== "1") {
       console.info("MIGRATION_STAGE=schema");
-      await client.query(await readFile(join(root, "migrations", "001_initial_schema.sql"), "utf8"));
+      if (process.env.MIGRATION_002_ONLY !== "1") {
+        await client.query(await readFile(join(root, "migrations", "001_initial_schema.sql"), "utf8"));
+      }
+      await client.query(await readFile(join(root, "migrations", "002_longitudinal_mission_memory.sql"), "utf8"));
     }
     console.info("MIGRATION_STAGE=seed");
     await client.query(await readFile(join(root, "seeds", "001_northstar_atlas.sql"), "utf8"));

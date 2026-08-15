@@ -3,7 +3,7 @@ import type { Context, Handler } from "aws-lambda";
 import { embedText, runBedrockContracts } from "./bedrock-client.js";
 import { mcpSecretSchema, NORTHSTAR_ORGANIZATION_ID, spikeEventSchema, UPDATED_FORECAST_SIGNAL } from "./contract.js";
 import { runManagedMcpRead, runManagedMcpVectorRetrieval } from "./mcp-client.js";
-import { createDemoSession, runDecisionCycle } from "./orchestrator.js";
+import { createDemoSession, retrievePersistedMissionContext, runDecisionCycle } from "./orchestrator.js";
 import { getSessionState, recordExecutiveResponse, resetSession, retryGuidance } from "./commands.js";
 import { handleHttpApiRequest, isHttpApiRequest } from "./http-api.js";
 
@@ -130,6 +130,10 @@ const operationHandler: Handler = async (event) => {
       timings: result.timings,
     }));
     return { statusCode: 200, body: JSON.stringify({ requestId, ...result }) };
+  }
+  if (parsedEvent.data.operation === "retrieve-context") {
+    const result = await retrievePersistedMissionContext(endpoint, parsedSecret, parsedEvent.data.sessionToken);
+    return { statusCode: 200, body: JSON.stringify({ requestId, status: "PERSISTED_CONTEXT_RETRIEVED", ...result }) };
   }
   if (parsedEvent.data.operation === "vector-retrieval") {
     const embedded = await embedText(UPDATED_FORECAST_SIGNAL);
