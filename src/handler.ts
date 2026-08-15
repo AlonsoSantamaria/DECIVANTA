@@ -1,10 +1,11 @@
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import type { Handler } from "aws-lambda";
+import type { Context, Handler } from "aws-lambda";
 import { embedText, runBedrockContracts } from "./bedrock-client.js";
 import { mcpSecretSchema, NORTHSTAR_ORGANIZATION_ID, spikeEventSchema, UPDATED_FORECAST_SIGNAL } from "./contract.js";
 import { runManagedMcpRead, runManagedMcpVectorRetrieval } from "./mcp-client.js";
 import { createDemoSession, runDecisionCycle } from "./orchestrator.js";
 import { getSessionState, recordExecutiveResponse, resetSession, retryGuidance } from "./commands.js";
+import { handleHttpApiRequest, isHttpApiRequest } from "./http-api.js";
 
 const secrets = new SecretsManagerClient({});
 
@@ -20,7 +21,7 @@ function commandFailure(requestId: string, error: unknown) {
   return { statusCode, body: JSON.stringify({ requestId, status }) };
 }
 
-export const handler: Handler = async (event) => {
+const operationHandler: Handler = async (event) => {
   const requestId = crypto.randomUUID();
   const parsedEvent = spikeEventSchema.safeParse(event ?? {});
   if (!parsedEvent.success) {
@@ -183,4 +184,9 @@ export const handler: Handler = async (event) => {
     statusCode: 200,
     body: JSON.stringify({ requestId, status: "MCP_SUCCESS", durationMs: result.durationMs }),
   };
+};
+
+export const handler = async (event: unknown, context: Context) => {
+  if (isHttpApiRequest(event)) return handleHttpApiRequest(event, operationHandler, context);
+  return operationHandler(event, context, () => undefined);
 };

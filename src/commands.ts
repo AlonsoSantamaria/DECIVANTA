@@ -73,8 +73,46 @@ async function finishReceipt(
   );
 }
 
+export type MemoryTraceEvent = {
+  eventType: string;
+  occurredAt: string;
+  sourceType: string;
+  title: string;
+  details: Record<string, boolean | string>;
+};
+
+const traceDetailAllowlist: Record<string, readonly string[]> = {
+  EVIDENCE_RECEIVED: ["forecastCode", "observed"],
+  MEMORY_RETRIEVED: ["decisionCode", "method"],
+  CONDITION_EVALUATED: ["threshold", "observed", "variance", "conditionMet"],
+  GUIDANCE_GENERATED: ["recommendedAction"],
+  GUIDANCE_UNAVAILABLE: ["status"],
+  EXECUTIVE_RESPONSE_RECORDED: ["action"],
+  FOLLOW_UP_SCHEDULED: ["nextReviewDate"],
+};
+
+export function projectTraceDetails(eventType: string, details: Record<string, unknown>): Record<string, boolean | string> {
+  const allowed = traceDetailAllowlist[eventType] ?? [];
+  return Object.fromEntries(Object.entries(details).filter(([key, value]) =>
+    allowed.includes(key) && (typeof value === "string" || typeof value === "boolean"),
+  )) as Record<string, boolean | string>;
+}
+
 export async function getSessionState(token: string): Promise<{
-  generation: string; currentReviewRunId: string | null; responseAction: string | null;
+  generation: string;
+  currentReviewRunId: string | null;
+  responseAction: string | null;
+  review: null | {
+    conditionMet: boolean;
+    decisionCode: string;
+    guidance: null | { explanation: string; recommendedAction: string; summary: string };
+    memoryMatches: Array<{ distance: string; rank: string; sourceType: string }>;
+    observed: string;
+    status: string;
+    threshold: string;
+    trace: MemoryTraceEvent[];
+    variance: string;
+  };
 }> {
   const pool = await sqlPool();
   const state = await pool.query<{ current_review_run_id: string | null; generation: string; response_action: string | null }>(
@@ -88,10 +126,67 @@ export async function getSessionState(token: string): Promise<{
     [digest(token)],
   );
   if (state.rowCount !== 1) throw new Error("DEMO_SESSION_INVALID");
-  return {
+  const base = {
     generation: state.rows[0].generation,
     currentReviewRunId: state.rows[0].current_review_run_id,
     responseAction: state.rows[0].response_action,
+  };
+  if (!base.currentReviewRunId) return { ...base, review: null };
+
+  const review = await pool.query<{
+    condition_met: boolean; decision_code: string; explanation: string | null; observed: string;
+    recommended_action: string | null; status: string; summary: string | null; threshold: string; variance: string;
+  }>(
+    `SELECT rr.status, d.decision_code, rr.threshold_value::STRING AS threshold,
+            rr.observed_value::STRING AS observed, rr.variance_value::STRING AS variance,
+            rr.condition_met, g.summary, g.recommended_action, g.explanation
+       FROM review_runs rr
+       JOIN demo_sessions s ON s.id = rr.session_id AND s.generation = rr.generation
+       JOIN decisions d ON d.id = rr.decision_id
+       LEFT JOIN guidance_records g ON g.review_run_id = rr.id
+      WHERE rr.id = $1::UUID AND s.token_hash = $2::BYTES`,
+    [base.currentReviewRunId, digest(token)],
+  );
+  if (review.rowCount !== 1) throw new Error("REVIEW_NOT_FOUND");
+  const matches = await pool.query<{ distance: string; rank: string; source_type: string }>(
+    `SELECT rm.rank::STRING AS rank, rm.distance::STRING AS distance, mi.source_type
+       FROM review_memory_matches rm
+       JOIN memory_items mi ON mi.id = rm.memory_item_id
+       JOIN review_runs rr ON rr.id = rm.review_run_id
+      WHERE rm.review_run_id = $1::UUID
+        AND (mi.source_id = rr.decision_id OR mi.source_id = rr.assumption_id)
+      ORDER BY rm.rank`,
+    [base.currentReviewRunId],
+  );
+  const events = await pool.query<{ details: Record<string, unknown>; event_type: string; occurred_at: Date; source_type: string; title: string }>(
+    `SELECT event_type, source_type, title, details, occurred_at
+       FROM memory_events WHERE review_run_id = $1::UUID ORDER BY occurred_at, id`,
+    [base.currentReviewRunId],
+  );
+  const row = review.rows[0];
+  return {
+    ...base,
+    review: {
+      conditionMet: row.condition_met,
+      decisionCode: row.decision_code,
+      guidance: row.summary && row.recommended_action && row.explanation ? {
+        explanation: row.explanation,
+        recommendedAction: row.recommended_action,
+        summary: row.summary,
+      } : null,
+      memoryMatches: matches.rows.map((match) => ({ distance: match.distance, rank: match.rank, sourceType: match.source_type })),
+      observed: row.observed,
+      status: row.status,
+      threshold: row.threshold,
+      trace: events.rows.map((item) => ({
+        details: projectTraceDetails(item.event_type, item.details),
+        eventType: item.event_type,
+        occurredAt: item.occurred_at.toISOString(),
+        sourceType: item.source_type,
+        title: item.title,
+      })),
+      variance: row.variance,
+    },
   };
 }
 

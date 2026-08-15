@@ -11,7 +11,7 @@ Parameters:
     NoEcho: true
 
 Resources:
-  DecisionCycleFunction:
+  ManagedMcpSpikeFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: decivanta-managed-mcp-spike
@@ -20,6 +20,12 @@ Resources:
       CodeUri: ../dist/
       MemorySize: 256
       Timeout: 30
+      Events:
+        HttpApi:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
       Environment:
         Variables:
           MCP_SECRET_ARN: !Ref McpSecretArn
@@ -42,4 +48,6 @@ Resources:
 
 Outputs:
   DecisionCycleFunctionName:
-    Value: !Ref DecisionCycleFunction
+    Value: !Ref ManagedMcpSpikeFunction
+  DecisionCycleApiUrl:
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}

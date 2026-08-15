@@ -9,6 +9,14 @@ import type { McpSecret } from "./contract.js";
 
 const UPDATED_FORECAST_CODE = "ATLAS-CASH-UPDATED-Q4-2026";
 
+export function canonicalEvidenceMatches(
+  matches: MemoryMatch[],
+  decisionId: string,
+  assumptionId: string,
+): MemoryMatch[] {
+  return matches.filter((match) => match.source_id === decisionId || match.source_id === assumptionId);
+}
+
 function digest(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
 }
@@ -148,7 +156,10 @@ async function persistCompletedReview(
       [started.reviewRunId, facts.decisionId, facts.assumptionId, snapshot.threshold, snapshot.observed,
         snapshot.variance, snapshot.conditionMet, started.sessionId, started.generation],
     );
-    for (const [index, match] of matches.entries()) {
+    // Archival scale fixtures are index instrumentation only. Only memory that
+    // canonically hydrates this decision/assumption can enter product evidence.
+    const canonicalMatches = canonicalEvidenceMatches(matches, facts.decisionId, facts.assumptionId);
+    for (const [index, match] of canonicalMatches.entries()) {
       await client.query(
         `INSERT INTO review_memory_matches (review_run_id, memory_item_id, rank, distance, retrieved_via)
          VALUES ($1::UUID, $2::UUID, $3::INT8, $4::DECIMAL, 'COCKROACH_CLOUD_MCP_VECTOR')
