@@ -9,6 +9,12 @@ export const spikeEventSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("schema-read") }).strict(),
   z.object({ operation: z.literal("bedrock-contract") }).strict(),
   z.object({ operation: z.literal("vector-retrieval") }).strict(),
+  z.object({ operation: z.literal("create-session") }).strict(),
+  z.object({
+    operation: z.literal("run-cycle"),
+    sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    idempotencyKey: z.string().uuid(),
+  }).strict(),
 ]);
 
 export type McpSecret = z.infer<typeof mcpSecretSchema>;

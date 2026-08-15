@@ -101,14 +101,7 @@ function classifyGuidanceFailure(error: unknown): GuidanceFailureReason {
   return "UNKNOWN";
 }
 
-export async function runBedrockContracts(client = new BedrockRuntimeClient({})): Promise<BedrockContractResult> {
-  const embedded = await embedText(
-    "Updated cash forecast challenges the condition supporting Project Atlas acceleration.",
-    client,
-  );
-  const norm = Math.sqrt(embedded.values.reduce((sum, value) => sum + value * value, 0));
-  const embeddingDurationMs = embedded.durationMs;
-
+export async function generateGuidance(client = new BedrockRuntimeClient({})): Promise<BedrockContractResult["guidance"]> {
   const guidanceStarted = performance.now();
   let repairAttempts: 0 | 1 = 0;
   let failureReason: GuidanceFailureReason = "UNKNOWN";
@@ -123,10 +116,7 @@ export async function runBedrockContracts(client = new BedrockRuntimeClient({}))
     try {
       const response = await client.send(new ConverseCommand(input));
       const value = validateGuidance(extractJson(textFromConverse(response)));
-      return {
-        embedding: { dimension: 1024, durationMs: embeddingDurationMs, norm },
-        guidance: { status: "GUIDANCE_AVAILABLE", durationMs: Math.round(performance.now() - guidanceStarted), repairAttempts, value },
-      };
+      return { status: "GUIDANCE_AVAILABLE", durationMs: Math.round(performance.now() - guidanceStarted), repairAttempts, value };
     } catch (error) {
       failureReason = classifyGuidanceFailure(error);
       failureDetail = error instanceof z.ZodError
@@ -140,8 +130,17 @@ export async function runBedrockContracts(client = new BedrockRuntimeClient({}))
       }
     }
   }
+  return { status: "GUIDANCE_UNAVAILABLE", durationMs: Math.round(performance.now() - guidanceStarted), failureDetail, failureReason, repairAttempts: 1 };
+}
+
+export async function runBedrockContracts(client = new BedrockRuntimeClient({})): Promise<BedrockContractResult> {
+  const embedded = await embedText(
+    "Updated cash forecast challenges the condition supporting Project Atlas acceleration.",
+    client,
+  );
+  const norm = Math.sqrt(embedded.values.reduce((sum, value) => sum + value * value, 0));
   return {
-    embedding: { dimension: 1024, durationMs: embeddingDurationMs, norm },
-    guidance: { status: "GUIDANCE_UNAVAILABLE", durationMs: Math.round(performance.now() - guidanceStarted), failureDetail, failureReason, repairAttempts: 1 },
+    embedding: { dimension: 1024, durationMs: embedded.durationMs, norm },
+    guidance: await generateGuidance(client),
   };
 }

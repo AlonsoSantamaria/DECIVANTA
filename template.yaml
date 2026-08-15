@@ -6,6 +6,9 @@ Parameters:
   McpSecretArn:
     Type: String
     NoEcho: true
+  SqlSecretArn:
+    Type: String
+    NoEcho: true
 
 Resources:
   ManagedMcpSpikeFunction:
@@ -20,6 +23,7 @@ Resources:
       Environment:
         Variables:
           MCP_SECRET_ARN: !Ref McpSecretArn
+          SQL_SECRET_ARN: !Ref SqlSecretArn
           MCP_ENDPOINT: https://cockroachlabs.cloud/mcp
           EMBEDDING_MODEL_ID: amazon.titan-embed-text-v2:0
           GUIDANCE_MODEL_ID: amazon.nova-lite-v1:0
@@ -27,7 +31,9 @@ Resources:
         - Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Ref McpSecretArn
+              Resource:
+                - !Ref McpSecretArn
+                - !Ref SqlSecretArn
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource:

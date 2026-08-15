@@ -3,6 +3,7 @@ import type { Handler } from "aws-lambda";
 import { embedText, runBedrockContracts } from "./bedrock-client.js";
 import { mcpSecretSchema, NORTHSTAR_ORGANIZATION_ID, spikeEventSchema, UPDATED_FORECAST_SIGNAL } from "./contract.js";
 import { runManagedMcpRead, runManagedMcpVectorRetrieval } from "./mcp-client.js";
+import { createDemoSession, runDecisionCycle } from "./orchestrator.js";
 
 const secrets = new SecretsManagerClient({});
 
@@ -50,12 +51,34 @@ export const handler: Handler = async (event) => {
     };
   }
 
+  if (parsedEvent.data.operation === "create-session") {
+    const result = await createDemoSession();
+    console.info(JSON.stringify({ requestId, status: "DEMO_SESSION_CREATED", generation: result.generation }));
+    return { statusCode: 201, body: JSON.stringify({ requestId, status: "DEMO_SESSION_CREATED", ...result }) };
+  }
+
   const secretArn = process.env.MCP_SECRET_ARN;
   const endpoint = process.env.MCP_ENDPOINT;
   if (!secretArn || !endpoint) throw new Error("MCP_CONFIGURATION_UNAVAILABLE");
 
   const secretResponse = await secrets.send(new GetSecretValueCommand({ SecretId: secretArn }));
   const parsedSecret = mcpSecretSchema.parse(JSON.parse(secretResponse.SecretString ?? "{}"));
+  if (parsedEvent.data.operation === "run-cycle") {
+    const result = await runDecisionCycle(
+      endpoint,
+      parsedSecret,
+      parsedEvent.data.sessionToken,
+      parsedEvent.data.idempotencyKey,
+    );
+    console.info(JSON.stringify({
+      requestId,
+      status: result.snapshot.status,
+      replayed: result.replayed,
+      reviewRunId: result.snapshot.reviewRunId,
+      timings: result.timings,
+    }));
+    return { statusCode: 200, body: JSON.stringify({ requestId, ...result }) };
+  }
   if (parsedEvent.data.operation === "vector-retrieval") {
     const embedded = await embedText(UPDATED_FORECAST_SIGNAL);
     const result = await runManagedMcpVectorRetrieval(
