@@ -4,8 +4,21 @@ import { embedText, runBedrockContracts } from "./bedrock-client.js";
 import { mcpSecretSchema, NORTHSTAR_ORGANIZATION_ID, spikeEventSchema, UPDATED_FORECAST_SIGNAL } from "./contract.js";
 import { runManagedMcpRead, runManagedMcpVectorRetrieval } from "./mcp-client.js";
 import { createDemoSession, runDecisionCycle } from "./orchestrator.js";
+import { getSessionState, recordExecutiveResponse, resetSession, retryGuidance } from "./commands.js";
 
 const secrets = new SecretsManagerClient({});
+
+function commandFailure(requestId: string, error: unknown) {
+  const code = error instanceof Error ? error.message : "COMMAND_FAILED";
+  const safeCodes = new Set([
+    "COMMAND_ALREADY_PROCESSING", "DEMO_SESSION_INVALID", "IDEMPOTENCY_CONFLICT",
+    "NEXT_REVIEW_DATE_INVALID", "NOTE_REQUIRED", "REVIEW_NOT_FOUND",
+  ]);
+  const status = safeCodes.has(code) ? code : "COMMAND_FAILED";
+  const statusCode = code === "DEMO_SESSION_INVALID" ? 401 : code === "REVIEW_NOT_FOUND" ? 404 : code === "IDEMPOTENCY_CONFLICT" ? 409 : 422;
+  console.warn(JSON.stringify({ requestId, status }));
+  return { statusCode, body: JSON.stringify({ requestId, status }) };
+}
 
 export const handler: Handler = async (event) => {
   const requestId = crypto.randomUUID();
@@ -55,6 +68,44 @@ export const handler: Handler = async (event) => {
     const result = await createDemoSession();
     console.info(JSON.stringify({ requestId, status: "DEMO_SESSION_CREATED", generation: result.generation }));
     return { statusCode: 201, body: JSON.stringify({ requestId, status: "DEMO_SESSION_CREATED", ...result }) };
+  }
+
+  if (parsedEvent.data.operation === "get-state") {
+    try {
+      const state = await getSessionState(parsedEvent.data.sessionToken);
+      return { statusCode: 200, body: JSON.stringify({ requestId, status: "STATE_READY", state }) };
+    } catch (error) {
+      return commandFailure(requestId, error);
+    }
+  }
+
+  if (parsedEvent.data.operation === "record-response") {
+    try {
+      const result = await recordExecutiveResponse(parsedEvent.data);
+      console.info(JSON.stringify({ requestId, status: "RESPONSE_RECORDED", replayed: result.replayed }));
+      return { statusCode: 200, body: JSON.stringify({ requestId, status: "RESPONSE_RECORDED", ...result }) };
+    } catch (error) {
+      return commandFailure(requestId, error);
+    }
+  }
+
+  if (parsedEvent.data.operation === "retry-guidance") {
+    try {
+      const result = await retryGuidance(parsedEvent.data);
+      return { statusCode: 200, body: JSON.stringify({ requestId, ...result }) };
+    } catch (error) {
+      return commandFailure(requestId, error);
+    }
+  }
+
+  if (parsedEvent.data.operation === "reset") {
+    try {
+      const result = await resetSession(parsedEvent.data);
+      console.info(JSON.stringify({ requestId, status: "DEMO_RESET", generation: result.generation, replayed: result.replayed }));
+      return { statusCode: 200, body: JSON.stringify({ requestId, status: "DEMO_RESET", ...result }) };
+    } catch (error) {
+      return commandFailure(requestId, error);
+    }
   }
 
   const secretArn = process.env.MCP_SECRET_ARN;
