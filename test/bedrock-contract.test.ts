@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { extractRowCount } from "../src/mcp-client.js";
 import type { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
-import { guidanceSchema, runBedrockContracts, validateGuidance } from "../src/bedrock-client.js";
+import { generateBusinessCaseGuidance, guidanceSchema, runBedrockContracts, validateGuidance } from "../src/bedrock-client.js";
 
 const validGuidance = {
   summary: "The financial condition supporting acceleration is no longer satisfied.",
@@ -46,5 +46,13 @@ describe("Bedrock guidance guard", () => {
     const result = await runBedrockContracts(client);
     expect(calls).toBe(3);
     expect(result.guidance).toMatchObject({ status: "GUIDANCE_UNAVAILABLE", repairAttempts: 1 });
+  });
+
+  it("returns a typed unavailable state for ORION guidance after one repair", async () => {
+    let calls = 0;
+    const client = { send: async () => { calls += 1; return { output: { message: { content: [{ text: "not-json" }] } } }; } } as unknown as BedrockRuntimeClient;
+    const result = await generateBusinessCaseGuidance(client);
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({ status: "GUIDANCE_UNAVAILABLE", failureReason: "JSON_PARSE", repairAttempts: 1 });
   });
 });

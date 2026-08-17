@@ -6,14 +6,19 @@ import { businessCaseWatchMission, evaluateOrionConflict } from "./missions/busi
 import { sqlPool } from "./sql-client.js";
 
 function digest(value: string): Buffer { return createHash("sha256").update(value, "utf8").digest(); }
+function requestDigest(value: unknown): Buffer { return digest(JSON.stringify(value)); }
+export function orionActionRequestHash(runId:string,nextReviewDate:string):Buffer{return requestDigest({runId,nextReviewDate});}
 function vector(values: number[]): string { return `[${values.join(",")}]`; }
 
-type OrionSnapshot = {
-  missionId: string; runId: string; status: "COMPLETED"; conflictDetected: true;
+type OrionSnapshotBase = {
+  missionId: string; runId: string; conflictDetected: true;
   facts: { authorizedCapex: string; committedOpeningDate: string; standardAdditionalCapex: string; standardDelayDays: number; acceleratedAdditionalCapex: string; acceleratedProtectsDate: true };
   evidence: Array<{ epistemicType: "FACT" | "DECISION" | "OBSERVED_PATTERN"; sourceType: string }>;
-  guidance: { recommendedAction: "PRESENT_BOTH_RECOMMEND_ACCELERATED"; summary: string; explanation: string; uncertaintyStatement: string };
 };
+type OrionSnapshot = OrionSnapshotBase & (
+  | { status: "COMPLETED"; guidance: { status: "GUIDANCE_AVAILABLE"; recommendedAction: "PRESENT_BOTH_RECOMMEND_ACCELERATED"; summary: string; explanation: string; uncertaintyStatement: string } }
+  | { status: "GUIDANCE_UNAVAILABLE"; guidance: { status: "GUIDANCE_UNAVAILABLE"; failureReason: string } }
+);
 
 async function sessionFor(token: string): Promise<{ id: string; generation: string }> {
   const pool = await sqlPool();
@@ -25,7 +30,7 @@ async function sessionFor(token: string): Promise<{ id: string; generation: stri
 export async function runOrionMission(endpoint: string, secret: McpSecret, token: string, idempotencyKey: string): Promise<{ replayed: boolean; snapshot: OrionSnapshot }> {
   const pool = await sqlPool();
   const session = await sessionFor(token);
-  const replay = await pool.query<{ response_snapshot: OrionSnapshot }>(`SELECT response_snapshot FROM mission_runs WHERE session_id=$1::UUID AND mission_id=$2 AND idempotency_key=$3 AND status='COMPLETED'`, [session.id,businessCaseWatchMission.id,idempotencyKey]);
+  const replay = await pool.query<{ response_snapshot: OrionSnapshot }>(`SELECT response_snapshot FROM mission_runs WHERE session_id=$1::UUID AND generation=$2::INT8 AND mission_id=$3 AND idempotency_key=$4 AND status IN ('COMPLETED','GUIDANCE_UNAVAILABLE')`, [session.id,session.generation,businessCaseWatchMission.id,idempotencyKey]);
   if (replay.rowCount === 1) return { replayed: true, snapshot: replay.rows[0].response_snapshot };
   const canonical = await pool.query<{ event_id:string; authorized_capex:string; committed_opening_date:string; alternative_a_capex:string; alternative_a_delay_days:string; alternative_a_protects_date:boolean; alternative_b_capex:string; alternative_b_protects_date:boolean }>(
     `SELECT e.id AS event_id,b.authorized_capex::STRING AS authorized_capex,b.committed_opening_date::STRING AS committed_opening_date,e.alternative_a_capex::STRING AS alternative_a_capex,e.alternative_a_delay_days::STRING AS alternative_a_delay_days,e.alternative_a_protects_date,e.alternative_b_capex::STRING AS alternative_b_capex,e.alternative_b_protects_date FROM business_cases b JOIN business_case_events e ON e.business_case_id=b.id WHERE b.mission_id=$1 AND e.event_code='ORION-PROCUREMENT-CONFLICT'`, [businessCaseWatchMission.id]);
@@ -41,15 +46,20 @@ export async function runOrionMission(endpoint: string, secret: McpSecret, token
   if (!["FACT","DECISION","OBSERVED_PATTERN"].every((kind)=>kinds.has(kind as "FACT"))) throw new Error("MEMORY_UNAVAILABLE");
   const guidance=await generateBusinessCaseGuidance();
   const runId=randomUUID();
-  const inferenceText=`Potential procurement decision conflict detected. ${guidance.value.uncertaintyStatement}`;
-  const inferenceEmbedding=await embedText(inferenceText);
-  const snapshot:OrionSnapshot={missionId:businessCaseWatchMission.id,runId,status:"COMPLETED",conflictDetected:true,facts:{authorizedCapex:row.authorized_capex,committedOpeningDate:row.committed_opening_date,standardAdditionalCapex:row.alternative_a_capex,standardDelayDays:Number(row.alternative_a_delay_days),acceleratedAdditionalCapex:row.alternative_b_capex,acceleratedProtectsDate:true},evidence:memories.rows.map((memory)=>({epistemicType:memory.epistemic_type,sourceType:memory.source_type})),guidance:{...guidance.value}};
+  const base:OrionSnapshotBase={missionId:businessCaseWatchMission.id,runId,conflictDetected:true,facts:{authorizedCapex:row.authorized_capex,committedOpeningDate:row.committed_opening_date,standardAdditionalCapex:row.alternative_a_capex,standardDelayDays:Number(row.alternative_a_delay_days),acceleratedAdditionalCapex:row.alternative_b_capex,acceleratedProtectsDate:true},evidence:memories.rows.map((memory)=>({epistemicType:memory.epistemic_type,sourceType:memory.source_type}))};
+  const inferenceText=guidance.status==="GUIDANCE_AVAILABLE"?`Potential procurement decision conflict detected. ${guidance.value.uncertaintyStatement}`:null;
+  const inferenceEmbedding=inferenceText?await embedText(inferenceText):null;
+  const snapshot:OrionSnapshot=guidance.status==="GUIDANCE_AVAILABLE"
+    ?{...base,status:"COMPLETED",guidance:{status:"GUIDANCE_AVAILABLE",...guidance.value}}
+    :{...base,status:"GUIDANCE_UNAVAILABLE",guidance:{status:"GUIDANCE_UNAVAILABLE",failureReason:guidance.failureReason}};
   const client=await pool.connect();
   try { await client.query("BEGIN");
-    await client.query(`INSERT INTO mission_runs(id,session_id,generation,mission_id,idempotency_key,status,event_id,conflict_detected,response_snapshot,completed_at) VALUES($1::UUID,$2::UUID,$3::INT8,$4,$5,'COMPLETED',$6::UUID,true,$7::JSONB,now())`,[runId,session.id,session.generation,businessCaseWatchMission.id,idempotencyKey,row.event_id,JSON.stringify(snapshot)]);
+    await client.query(`INSERT INTO mission_runs(id,session_id,generation,mission_id,idempotency_key,status,event_id,conflict_detected,response_snapshot,completed_at) VALUES($1::UUID,$2::UUID,$3::INT8,$4,$5,$6,$7::UUID,true,$8::JSONB,now())`,[runId,session.id,session.generation,businessCaseWatchMission.id,idempotencyKey,snapshot.status,row.event_id,JSON.stringify(snapshot)]);
     for(const [index,match] of retrieved.matches.filter((match)=>ids.includes(match.id)).entries()) await client.query(`INSERT INTO mission_run_matches(mission_run_id,memory_item_id,rank,distance) VALUES($1::UUID,$2::UUID,$3::INT8,$4::DECIMAL)`,[runId,match.id,index+1,match.cosine_distance.toString()]);
-    await client.query(`INSERT INTO mission_guidance(id,mission_run_id,model_id,summary,recommended_action,uncertainty_statement) VALUES($1::UUID,$2::UUID,$3,$4,$5,$6)`,[randomUUID(),runId,process.env.GUIDANCE_MODEL_ID??GUIDANCE_MODEL_ID,guidance.value.summary,guidance.value.recommendedAction,guidance.value.uncertaintyStatement]);
-    await client.query(`INSERT INTO memory_items(id,organization_id,source_type,source_id,content,language_code,embedding_model,embedding,session_id,generation,mission_id,epistemic_type,provenance) VALUES($1::UUID,$2::UUID,'inference',$3::UUID,$4,'en',$5,$6::VECTOR,$7::UUID,$8::INT8,$9,'INFERENCE',$10::JSONB)`,[randomUUID(),NORTHSTAR_ORGANIZATION_ID,runId,inferenceText,process.env.EMBEDDING_MODEL_ID??EMBEDDING_MODEL_ID,vector(inferenceEmbedding.values),session.id,session.generation,businessCaseWatchMission.id,JSON.stringify({supportedBy:ids,uncertain:true})]);
+    if(guidance.status==="GUIDANCE_AVAILABLE"&&inferenceText&&inferenceEmbedding){
+      await client.query(`INSERT INTO mission_guidance(id,mission_run_id,model_id,summary,recommended_action,uncertainty_statement) VALUES($1::UUID,$2::UUID,$3,$4,$5,$6)`,[randomUUID(),runId,process.env.GUIDANCE_MODEL_ID??GUIDANCE_MODEL_ID,guidance.value.summary,guidance.value.recommendedAction,guidance.value.uncertaintyStatement]);
+      await client.query(`INSERT INTO memory_items(id,organization_id,source_type,source_id,content,language_code,embedding_model,embedding,session_id,generation,mission_id,epistemic_type,provenance) VALUES($1::UUID,$2::UUID,'inference',$3::UUID,$4,'en',$5,$6::VECTOR,$7::UUID,$8::INT8,$9,'INFERENCE',$10::JSONB)`,[randomUUID(),NORTHSTAR_ORGANIZATION_ID,runId,inferenceText,process.env.EMBEDDING_MODEL_ID??EMBEDDING_MODEL_ID,vector(inferenceEmbedding.values),session.id,session.generation,businessCaseWatchMission.id,JSON.stringify({supportedBy:ids,uncertain:true})]);
+    }
     await client.query("COMMIT");
   } catch(error){await client.query("ROLLBACK").catch(()=>undefined);throw error;} finally{client.release();}
   return {replayed:false,snapshot};
@@ -58,9 +68,13 @@ export async function runOrionMission(endpoint: string, secret: McpSecret, token
 export async function recordOrionAction(token:string,runId:string,idempotencyKey:string,nextReviewDate:string):Promise<{actionId:string;nextReviewDate:string;replayed:boolean}> {
   if(nextReviewDate<=new Date().toISOString().slice(0,10)) throw new Error("NEXT_REVIEW_DATE_INVALID");
   const pool=await sqlPool(); const session=await sessionFor(token);
-  const existing=await pool.query<{id:string;next_review_date:string}>(`SELECT a.id,a.next_review_date::STRING AS next_review_date FROM mission_actions a JOIN mission_runs r ON r.id=a.mission_run_id WHERE r.id=$1::UUID AND r.session_id=$2::UUID AND r.generation=$3::INT8`,[runId,session.id,session.generation]);
-  if(existing.rowCount===1) return {actionId:existing.rows[0].id,nextReviewDate:existing.rows[0].next_review_date,replayed:true};
-  const owned=await pool.query(`SELECT 1 FROM mission_runs WHERE id=$1::UUID AND session_id=$2::UUID AND generation=$3::INT8 AND status='COMPLETED'`,[runId,session.id,session.generation]); if(owned.rowCount!==1) throw new Error("MISSION_RUN_NOT_FOUND");
+  const hash=orionActionRequestHash(runId,nextReviewDate);
+  const prior=await pool.query<{request_hash:Buffer;response_snapshot:{actionId:string;nextReviewDate:string}|null;status:string}>(`SELECT request_hash,response_snapshot,status FROM command_receipts WHERE session_id=$1::UUID AND command_type='orion_action' AND idempotency_key=$2`,[session.id,idempotencyKey]);
+  if(prior.rowCount===1){
+    if(!Buffer.from(prior.rows[0].request_hash).equals(hash))throw new Error("IDEMPOTENCY_CONFLICT");
+    if(prior.rows[0].status!=="completed"||!prior.rows[0].response_snapshot)throw new Error("COMMAND_ALREADY_PROCESSING");
+    return{...prior.rows[0].response_snapshot,replayed:true};
+  }
   const actionId=randomUUID();
   const records=[
     {sourceType:"executive_decision",kind:"DECISION",content:"Present both procurement alternatives to the client and recommend accelerated procurement."},
@@ -70,11 +84,31 @@ export async function recordOrionAction(token:string,runId:string,idempotencyKey
   ] as const;
   const embedded=await Promise.all(records.map(async(record)=>({...record,embedding:(await embedText(record.content)).values})));
   const client=await pool.connect(); try{await client.query("BEGIN");
+    const locked=await client.query(`SELECT 1 FROM demo_sessions WHERE id=$1::UUID AND generation=$2::INT8 AND expires_at>now() FOR UPDATE`,[session.id,session.generation]);
+    if(locked.rowCount!==1)throw new Error("DEMO_SESSION_INVALID");
+    const receipt=await client.query<{request_hash:Buffer;response_snapshot:{actionId:string;nextReviewDate:string}|null;status:string}>(`SELECT request_hash,response_snapshot,status FROM command_receipts WHERE session_id=$1::UUID AND command_type='orion_action' AND idempotency_key=$2`,[session.id,idempotencyKey]);
+    if(receipt.rowCount===1){
+      if(!Buffer.from(receipt.rows[0].request_hash).equals(hash))throw new Error("IDEMPOTENCY_CONFLICT");
+      if(receipt.rows[0].status!=="completed"||!receipt.rows[0].response_snapshot)throw new Error("COMMAND_ALREADY_PROCESSING");
+      await client.query("COMMIT");
+      return{...receipt.rows[0].response_snapshot,replayed:true};
+    }
+    const owned=await client.query(`SELECT 1 FROM mission_runs WHERE id=$1::UUID AND session_id=$2::UUID AND generation=$3::INT8 AND status='COMPLETED'`,[runId,session.id,session.generation]); if(owned.rowCount!==1) throw new Error("MISSION_RUN_NOT_FOUND");
+    await client.query(`INSERT INTO command_receipts(id,session_id,generation,command_type,idempotency_key,request_hash,status) VALUES($1::UUID,$2::UUID,$3::INT8,'orion_action',$4,$5::BYTES,'processing')`,[randomUUID(),session.id,session.generation,idempotencyKey,hash]);
+    const existing=await client.query<{id:string;next_review_date:string}>(`SELECT id,next_review_date::STRING AS next_review_date FROM mission_actions WHERE mission_run_id=$1::UUID`,[runId]);
+    if(existing.rowCount===1){
+      if(existing.rows[0].next_review_date!==nextReviewDate)throw new Error("ACTION_ALREADY_RECORDED");
+      const snapshot={actionId:existing.rows[0].id,nextReviewDate};
+      await client.query(`UPDATE command_receipts SET status='completed',resource_id=$4::UUID,response_snapshot=$5::JSONB,completed_at=now() WHERE session_id=$1::UUID AND command_type='orion_action' AND idempotency_key=$2 AND generation=$3::INT8`,[session.id,idempotencyKey,session.generation,snapshot.actionId,JSON.stringify(snapshot)]);
+      await client.query("COMMIT");
+      return{...snapshot,replayed:true};
+    }
     await client.query(`INSERT INTO mission_actions(id,mission_run_id,decision_text,condition_text,commitment_text,next_review_date) VALUES($1::UUID,$2::UUID,$3,$4,$5,$6::DATE)`,[actionId,runId,records[0].content,records[1].content,records[2].content,nextReviewDate]);
     for(const record of embedded) await client.query(`INSERT INTO memory_items(id,organization_id,source_type,source_id,content,language_code,embedding_model,embedding,session_id,generation,mission_id,epistemic_type,provenance) VALUES($1::UUID,$2::UUID,$3,$4::UUID,$5,'en',$6,$7::VECTOR,$8::UUID,$9::INT8,$10,$11,$12::JSONB)`,[randomUUID(),NORTHSTAR_ORGANIZATION_ID,record.sourceType,actionId,record.content,process.env.EMBEDDING_MODEL_ID??EMBEDDING_MODEL_ID,vector(record.embedding),session.id,session.generation,businessCaseWatchMission.id,record.kind,JSON.stringify({missionRunId:runId})]);
+    const snapshot={actionId,nextReviewDate};
+    await client.query(`UPDATE command_receipts SET status='completed',resource_id=$4::UUID,response_snapshot=$5::JSONB,completed_at=now() WHERE session_id=$1::UUID AND command_type='orion_action' AND idempotency_key=$2 AND generation=$3::INT8`,[session.id,idempotencyKey,session.generation,actionId,JSON.stringify(snapshot)]);
     await client.query("COMMIT");
   }catch(error){await client.query("ROLLBACK").catch(()=>undefined);throw error;}finally{client.release();}
-  void idempotencyKey;
   return {actionId,nextReviewDate,replayed:false};
 }
 

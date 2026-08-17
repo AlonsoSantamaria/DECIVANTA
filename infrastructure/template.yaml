@@ -2,6 +2,20 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: DECIVANTA sponsor-backed decision-cycle API
 
+Globals:
+  HttpApi:
+    CorsConfiguration:
+      AllowOrigins:
+        - http://127.0.0.1:3100
+        - http://localhost:3100
+        - https://judge.d2mer8s8oyexv3.amplifyapp.com
+      AllowHeaders:
+        - authorization
+        - content-type
+      AllowMethods:
+        - POST
+        - OPTIONS
+
 Parameters:
   McpSecretArn:
     Type: String

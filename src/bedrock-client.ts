@@ -142,7 +142,22 @@ export const businessCaseGuidanceSchema = z.object({
 }).strict();
 export type BusinessCaseGuidance = z.infer<typeof businessCaseGuidanceSchema>;
 
-export async function generateBusinessCaseGuidance(client = new BedrockRuntimeClient({})): Promise<{ durationMs: number; value: BusinessCaseGuidance }> {
+export type BusinessCaseGuidanceResult =
+  | { status: "GUIDANCE_AVAILABLE"; durationMs: number; repairAttempts: 0 | 1; value: BusinessCaseGuidance }
+  | { status: "GUIDANCE_UNAVAILABLE"; durationMs: number; failureReason: GuidanceFailureReason; repairAttempts: 1 };
+
+export function validateBusinessCaseGuidance(value: unknown): BusinessCaseGuidance {
+  const guidance = businessCaseGuidanceSchema.parse(value);
+  const prose = `${guidance.summary} ${guidance.explanation} ${guidance.uncertaintyStatement}`;
+  if (NUMERIC_CLAIM.test(prose)) throw new Error("GUIDANCE_UNSUPPORTED_NUMBER");
+  if (AUTONOMOUS_AUTHORITY.test(prose)) throw new Error("GUIDANCE_AUTONOMOUS_AUTHORITY");
+  if (!/observ|pattern|not a confirmed|not.*preference/i.test(guidance.uncertaintyStatement)) {
+    throw new Error("GUIDANCE_UNCERTAINTY_REQUIRED");
+  }
+  return guidance;
+}
+
+export async function generateBusinessCaseGuidance(client = new BedrockRuntimeClient({})): Promise<BusinessCaseGuidanceResult> {
   const started = performance.now();
   const system = [
     "Return JSON only with summary, recommendedAction, explanation, uncertaintyStatement.",
@@ -153,13 +168,18 @@ export async function generateBusinessCaseGuidance(client = new BedrockRuntimeCl
     "Do not claim DECIVANTA made or authorized the decision."
   ].join(" ");
   const facts = "ORION standard procurement protects budget but threatens the committed opening date. Accelerated procurement adds cost and protects that date. Historical fact: a general CAPEX increase was rejected. Historical decision: additional cost was later accepted to protect the opening date.";
-  const response = await client.send(new ConverseCommand({ modelId: process.env.GUIDANCE_MODEL_ID ?? GUIDANCE_MODEL_ID, system: [{ text: system }], messages: [{ role: "user", content: [{ text: facts }] }], inferenceConfig: { maxTokens: 350, temperature: 0 } }));
-  const value = businessCaseGuidanceSchema.parse(extractJson(textFromConverse(response)));
-  const prose = `${value.summary} ${value.explanation} ${value.uncertaintyStatement}`;
-  if (NUMERIC_CLAIM.test(prose)) throw new Error("GUIDANCE_UNSUPPORTED_NUMBER");
-  if (AUTONOMOUS_AUTHORITY.test(prose)) throw new Error("GUIDANCE_AUTONOMOUS_AUTHORITY");
-  if (!/observ|pattern|not a confirmed|not.*preference/i.test(value.uncertaintyStatement)) throw new Error("GUIDANCE_UNCERTAINTY_REQUIRED");
-  return { durationMs: Math.round(performance.now() - started), value };
+  let failureReason: GuidanceFailureReason = "UNKNOWN";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const prompt = attempt === 0 ? facts : `${facts} Previous output failed validation. Follow the JSON contract exactly.`;
+      const response = await client.send(new ConverseCommand({ modelId: process.env.GUIDANCE_MODEL_ID ?? GUIDANCE_MODEL_ID, system: [{ text: system }], messages: [{ role: "user", content: [{ text: prompt }] }], inferenceConfig: { maxTokens: 350, temperature: 0 } }));
+      const value = validateBusinessCaseGuidance(extractJson(textFromConverse(response)));
+      return { status: "GUIDANCE_AVAILABLE", durationMs: Math.round(performance.now() - started), repairAttempts: attempt as 0 | 1, value };
+    } catch (error) {
+      failureReason = classifyGuidanceFailure(error);
+    }
+  }
+  return { status: "GUIDANCE_UNAVAILABLE", durationMs: Math.round(performance.now() - started), failureReason, repairAttempts: 1 };
 }
 
 export const externalIntelligenceGuidanceSchema = z.object({

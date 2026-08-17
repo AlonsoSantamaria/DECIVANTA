@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { businessCaseGuidanceSchema } from "../src/bedrock-client.js";
 import { buildMissionRetrievalQuery } from "../src/mcp-client.js";
 import { businessCaseWatchMission, evaluateOrionConflict } from "../src/missions/business-case-watch.js";
+import { orionActionRequestHash } from "../src/orion-mission.js";
 
 describe("Mission 2 Business Case Watch",()=>{
   it("detects the deterministic cost/schedule conflict",()=>{
@@ -18,5 +19,10 @@ describe("Mission 2 Business Case Watch",()=>{
   it("builds governed mission-scoped retrieval",()=>{
     const query=buildMissionRetrievalQuery("00000000-0000-4000-8000-000000000001","business-case-watch-orion",Array.from({length:1024},()=>0.03125));
     expect(query).toContain("mission_id = 'business-case-watch-orion'"); expect(query).toContain("session_id IS NULL"); expect(query.length).toBeLessThan(16384);
+  });
+  it("binds ORION action receipts to the complete request",()=>{
+    const runId="00000000-0000-4000-8000-000000000001";
+    expect(orionActionRequestHash(runId,"2026-09-01").equals(orionActionRequestHash(runId,"2026-09-01"))).toBe(true);
+    expect(orionActionRequestHash(runId,"2026-09-01").equals(orionActionRequestHash(runId,"2026-09-02"))).toBe(false);
   });
 });
