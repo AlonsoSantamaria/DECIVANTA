@@ -42,6 +42,7 @@ export const guidanceSchema = z.object({
 export type Guidance = z.infer<typeof guidanceSchema>;
 
 const AUTONOMOUS_AUTHORITY = /\b(cancel(?:led)?|paus(?:e|ed)|reject(?:ed)?|approv(?:e|ed)|authoriz(?:e|ed)|decid(?:e|ed))\b/i;
+const DECIVANTA_AUTONOMOUS_AUTHORITY = /\bDECIVANTA\b.{0,80}\b(cancel(?:led)?|paus(?:e|ed)|reject(?:ed)?|approv(?:e|ed)|authoriz(?:e|ed)|decid(?:e|ed))\b/i;
 const NUMERIC_CLAIM = /\d/;
 
 export function validateGuidance(value: unknown): Guidance {
@@ -158,6 +159,53 @@ export async function generateBusinessCaseGuidance(client = new BedrockRuntimeCl
   if (NUMERIC_CLAIM.test(prose)) throw new Error("GUIDANCE_UNSUPPORTED_NUMBER");
   if (AUTONOMOUS_AUTHORITY.test(prose)) throw new Error("GUIDANCE_AUTONOMOUS_AUTHORITY");
   if (!/observ|pattern|not a confirmed|not.*preference/i.test(value.uncertaintyStatement)) throw new Error("GUIDANCE_UNCERTAINTY_REQUIRED");
+  return { durationMs: Math.round(performance.now() - started), value };
+}
+
+export const externalIntelligenceGuidanceSchema = z.object({
+  summary: z.string().min(20).max(360),
+  recommendedAction: z.literal("REVIEW_ORION_PROCUREMENT_EXPOSURE"),
+  potentialImpact: z.string().min(20).max(420),
+  uncertaintyStatement: z.string().min(20).max(300),
+}).strict();
+export type ExternalIntelligenceGuidance = z.infer<typeof externalIntelligenceGuidanceSchema>;
+
+export function validateExternalIntelligenceGuidance(value: unknown): ExternalIntelligenceGuidance {
+  const guidance = externalIntelligenceGuidanceSchema.parse(value);
+  const prose = `${guidance.summary} ${guidance.potentialImpact} ${guidance.uncertaintyStatement}`;
+  if (NUMERIC_CLAIM.test(prose)) throw new Error("GUIDANCE_UNSUPPORTED_NUMBER");
+  if (DECIVANTA_AUTONOMOUS_AUTHORITY.test(prose)) throw new Error("GUIDANCE_AUTONOMOUS_AUTHORITY");
+  if (!/supplier|origin|classification|contract/i.test(guidance.uncertaintyStatement)) {
+    throw new Error("GUIDANCE_UNCERTAINTY_REQUIRED");
+  }
+  return guidance;
+}
+
+export async function generateExternalIntelligenceGuidance(
+  client = new BedrockRuntimeClient({}),
+): Promise<{ durationMs: number; value: ExternalIntelligenceGuidance }> {
+  const started = performance.now();
+  const system = [
+    "Return JSON only with summary, recommendedAction, potentialImpact, uncertaintyStatement.",
+    "recommendedAction must be REVIEW_ORION_PROCUREMENT_EXPOSURE.",
+    "Connect the verified steel tariff change to ORION's procurement, capital budget, and committed opening date.",
+    "Describe only potential cost and schedule exposure; do not claim a quantified project impact.",
+    "State that supplier origin, tariff classification, and contract allocation are not yet verified.",
+    "Do not include digits or claim DECIVANTA made or authorized a decision.",
+  ].join(" ");
+  const facts = [
+    "A verified Federal Register event increased the United States tariff on covered steel articles and derivatives.",
+    "ORION has an approved capital budget, a committed opening date, and an active procurement trade-off.",
+    "Historical memory shows additional cost was accepted only when needed to protect that date.",
+    "The actual ORION supplier origin, product classification, and contractual tariff allocation are unknown.",
+  ].join(" ");
+  const response = await client.send(new ConverseCommand({
+    modelId: process.env.GUIDANCE_MODEL_ID ?? GUIDANCE_MODEL_ID,
+    system: [{ text: system }],
+    messages: [{ role: "user", content: [{ text: facts }] }],
+    inferenceConfig: { maxTokens: 350, temperature: 0 },
+  }));
+  const value = validateExternalIntelligenceGuidance(extractJson(textFromConverse(response)));
   return { durationMs: Math.round(performance.now() - started), value };
 }
 

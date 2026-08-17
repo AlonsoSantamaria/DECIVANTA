@@ -20,6 +20,8 @@ export const spikeEventSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("orion-review"), sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/), idempotencyKey: z.string().uuid() }).strict(),
   z.object({ operation: z.literal("orion-action"), sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/), idempotencyKey: z.string().uuid(), runId: z.string().uuid(), nextReviewDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict(),
   z.object({ operation: z.literal("orion-context"), sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
+  z.object({ operation: z.literal("external-event-acquire"), sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
+  z.object({ operation: z.literal("external-intelligence-review"), sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/), idempotencyKey: z.string().uuid() }).strict(),
   z.object({
     operation: z.literal("record-response"),
     sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),

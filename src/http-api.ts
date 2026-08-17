@@ -79,6 +79,11 @@ export async function handleHttpApiRequest(
       command = { operation: "orion-action", sessionToken: bearer(event), ...body };
     } else if (method === "POST" && event.rawPath === "/v1/missions/orion/context-retrievals") {
       command = { operation: "orion-context", sessionToken: bearer(event) };
+    } else if (method === "POST" && event.rawPath === "/v1/missions/orion/external-events") {
+      command = { operation: "external-event-acquire", sessionToken: bearer(event) };
+    } else if (method === "POST" && event.rawPath === "/v1/missions/orion/external-intelligence-reviews") {
+      const body = reviewBodySchema.parse(bodyOf(event));
+      command = { operation: "external-intelligence-review", sessionToken: bearer(event), idempotencyKey: body.idempotencyKey };
     } else if (method === "POST" && event.rawPath === "/v1/demo/guidance-retries") {
       const body = retryBodySchema.parse(bodyOf(event));
       command = { operation: "retry-guidance", sessionToken: bearer(event), ...body };

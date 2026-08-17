@@ -54,10 +54,12 @@ async function main(): Promise<void> {
       }
       await client.query(await readFile(join(root, "migrations", "002_longitudinal_mission_memory.sql"), "utf8"));
       await client.query(await readFile(join(root, "migrations", "003_business_case_watch.sql"), "utf8"));
+      await client.query(await readFile(join(root, "migrations", "004_external_intelligence_watch.sql"), "utf8"));
     }
     console.info("MIGRATION_STAGE=seed");
     await client.query(await readFile(join(root, "seeds", "001_northstar_atlas.sql"), "utf8"));
     await client.query(await readFile(join(root, "seeds", "002_orion.sql"), "utf8"));
+    await client.query(await readFile(join(root, "seeds", "003_external_event.sql"), "utf8"));
     const memories = await client.query<{ id: string; content: string }>(
       "SELECT id, content FROM memory_items WHERE organization_id = $1::UUID AND embedding IS NULL ORDER BY id",
       ["00000000-0000-4000-8000-000000000001"],

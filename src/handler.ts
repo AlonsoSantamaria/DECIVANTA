@@ -7,6 +7,7 @@ import { createDemoSession, retrievePersistedMissionContext, runDecisionCycle } 
 import { getSessionState, recordExecutiveResponse, resetSession, retryGuidance } from "./commands.js";
 import { handleHttpApiRequest, isHttpApiRequest } from "./http-api.js";
 import { recordOrionAction, retrieveOrionContext, runOrionMission } from "./orion-mission.js";
+import { acquireVerifiedExternalEvent, runExternalIntelligenceMission } from "./external-intelligence.js";
 
 const secrets = new SecretsManagerClient({});
 
@@ -147,6 +148,14 @@ const operationHandler: Handler = async (event) => {
   if (parsedEvent.data.operation === "orion-context") {
     const result = await retrieveOrionContext(endpoint, parsedSecret, parsedEvent.data.sessionToken);
     return { statusCode: 200, body: JSON.stringify({ requestId, status: "ORION_CONTEXT_RETRIEVED", ...result }) };
+  }
+  if (parsedEvent.data.operation === "external-event-acquire") {
+    const result = await acquireVerifiedExternalEvent(parsedEvent.data.sessionToken);
+    return { statusCode: 200, body: JSON.stringify({ requestId, status: "EXTERNAL_EVENT_ACQUIRED", ...result }) };
+  }
+  if (parsedEvent.data.operation === "external-intelligence-review") {
+    const result = await runExternalIntelligenceMission(endpoint, parsedSecret, parsedEvent.data.sessionToken, parsedEvent.data.idempotencyKey);
+    return { statusCode: 200, body: JSON.stringify({ requestId, status: "EXTERNAL_INTELLIGENCE_COMPLETED", ...result }) };
   }
   if (parsedEvent.data.operation === "vector-retrieval") {
     const embedded = await embedText(UPDATED_FORECAST_SIGNAL);
