@@ -2,9 +2,12 @@
 .env.*
 !.env.example
 node_modules/
+.node_modules_pre_item7/
 .venv/
 venv/
 dist/
+out/
+.next/
 build/
 coverage/
 __pycache__/
@@ -13,3 +16,5 @@ __pycache__/
 Thumbs.db
 .idea/
 .vscode/
+samconfig.toml
+.aws-sam/
